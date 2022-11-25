@@ -24,6 +24,8 @@ const val DIRECT_ROUTE = "direct:twitter"
 const val COUNT_ROUTE = "direct:extractor"
 const val LOG_ROUTE = "direct:log"
 const val INDEX_VIEW = "index"
+const val CHAR_OFFSET = 4
+const val DEFAULT_NUM_RES = 5
 
 @Controller
 class SearchController(private val producerTemplate: ProducerTemplate) {
@@ -45,17 +47,18 @@ class Router(meterRegistry: MeterRegistry) : RouteBuilder() {
     override fun configure() {
         // Llega aqui y se crea el msj
         from(DIRECT_ROUTE)
-                .process { exchange ->
-                    val originalKeywords = exchange.getIn().getHeader("keywords") as? String ?: ""
-                    val (maxList, keywordsList) = originalKeywords.split(" ")
-                            .partition { it.startsWith("max:") }
-                    exchange.getIn().setHeader("keywords",keywordsList.joinToString(" "))
-                    val max = maxList.firstOrNull()
-                            ?.drop(4)
-                            ?.toIntOrNull()
-                            ?: 5
-                    exchange.getIn().setHeader("count", max)
+            .process { exchange ->
+                val originalKeywords = exchange.getIn().getHeader("keywords") as? String ?: ""
+                val (maxList, keywordsList) = originalKeywords.split(" ").partition {
+                    it.startsWith("max:")
                 }
+                exchange.getIn().setHeader("keywords", keywordsList.joinToString(" "))
+                val max = maxList.firstOrNull()
+                    ?.drop(CHAR_OFFSET)
+                    ?.toIntOrNull()
+                    ?: DEFAULT_NUM_RES
+                exchange.getIn().setHeader("count", max)
+            }
             .toD("twitter-search:\${header.keywords}?count=\${header.count}")
             .wireTap(LOG_ROUTE)
             .wireTap(COUNT_ROUTE)
@@ -63,7 +66,8 @@ class Router(meterRegistry: MeterRegistry) : RouteBuilder() {
         from(LOG_ROUTE)
             .marshal().json(JsonLibrary.Gson)
             .to("file://log?fileName=\${date:now:yyyy/MM/dd/HH-mm-ss.SSS}.json")
-        // Pilla el mensaje del body y lo convierte en n mensajes (usa el process que se invoca tantas veces como mensajes)
+        // Pilla el mensaje del body y lo convierte en n mensajes
+        // (usa el process que se invoca tantas veces como mensajes)
         from(COUNT_ROUTE)
             .split(body())
             .process { exchange ->
