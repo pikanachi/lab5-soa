@@ -32,6 +32,7 @@ class SearchController(private val producerTemplate: ProducerTemplate) {
 
     @RequestMapping(value = ["/search"])
     @ResponseBody
+    // Le mandas keywords que es lo que tecleas, el body no importa
     fun search(@RequestParam("q") q: String?): Any =
         producerTemplate.requestBodyAndHeader(DIRECT_ROUTE, "mandalorian", "keywords", q)
 }
@@ -42,15 +43,27 @@ class Router(meterRegistry: MeterRegistry) : RouteBuilder() {
     private val perKeywordMessages = TaggedCounter("per-keyword-messages", "keyword", meterRegistry)
 
     override fun configure() {
+        // Llega aqui y se crea el msj
         from(DIRECT_ROUTE)
-            .toD("twitter-search:\${header.keywords}")
+                .process { exchange ->
+                    val originalKeywords = exchange.getIn().getHeader("keywords") as? String ?: ""
+                    val (maxList, keywordsList) = originalKeywords.split(" ")
+                            .partition { it.startsWith("max:") }
+                    exchange.getIn().setHeader("keywords",keywordsList.joinToString(" "))
+                    val max = maxList.firstOrNull()
+                            ?.drop(4)
+                            ?.toIntOrNull()
+                            ?: 5
+                    exchange.getIn().setHeader("count", max)
+                }
+            .toD("twitter-search:\${header.keywords}?count=\${header.count}")
             .wireTap(LOG_ROUTE)
             .wireTap(COUNT_ROUTE)
-
+        // Recibe el objeto y lo convierte a json y lo guarda en la carpeta de log con el nombre yyyy/MM/dd/HH
         from(LOG_ROUTE)
             .marshal().json(JsonLibrary.Gson)
             .to("file://log?fileName=\${date:now:yyyy/MM/dd/HH-mm-ss.SSS}.json")
-
+        // Pilla el mensaje del body y lo convierte en n mensajes (usa el process que se invoca tantas veces como mensajes)
         from(COUNT_ROUTE)
             .split(body())
             .process { exchange ->
